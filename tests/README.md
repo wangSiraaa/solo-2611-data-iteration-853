@@ -20,4 +20,7 @@ Modules:
 | `test_repository.py` | product binding, relation rows, partial imports |
 | `test_service.py` | artifact recompilation, presence/type preservation |
 | `test_demo_truth.py` | demo relation table against independent truth |
+| `test_ownership.py` | ownership-transfer import → lifetime manifest |
+| `test_layout.py` | minimal-peak workspace layout over a manifest |
+| `test_ownership_demo.py` | real bytes → manifest → layout, CLI, legacy telemetry |
 | `test_scale.py` | 100 MiB / 1 MiB records / 2 MiB body cap (opt-in) |

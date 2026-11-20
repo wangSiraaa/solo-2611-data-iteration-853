@@ -98,13 +98,72 @@ declared base type.
 | `telber/stream.py` | bounded streaming delimitation over the original octets |
 | `telber/repository.py` | SQLite product registry + per-record fact relation store |
 | `telber/service.py` | independent compile service: artifact, check, encode |
+| `telber/ownership.py` | ownership-transfer import → reopenable lifetime manifest |
+| `telber/layout.py` | minimal-peak contiguous workspace planner over a manifest |
 | `telber/build.py` | independent byte builder used only by tests/demo |
-| `telber/demo.py`, `telber/cli.py` | demo and command-line entry points |
+| `telber/demo.py`, `telber/ownership_demo.py`, `telber/cli.py` | demos and CLI |
 
 Two source modules carry the core: `schema.py` + `codec.py` compile and
 interpret the directory, and `stream.py` + `repository.py` produce the streaming
 relation table. The compiled prediction table (`Product.match_table()`) drives
 optional presence decisions, nested boundaries and error offsets.
+
+## Ownership and lifetime manifests
+
+A separate directory (`schemas/ownership_v1.json`) describes buffer
+ownership-transfer frames. It reuses the *same* schema compiler, codec and
+scanner as ordinary telemetry; only the field layout is new. Each frame has an
+operation:
+
+* **allocate** (`op=0`, `size` present) creates a *new identity* with a byte
+  size and an initial channel-local handle `(channel, handle)`;
+* **handoff** (`op=1`, `to_channel`/`to_handle`) atomically moves the same
+  occupancy from the sender's handle to a *free* receiver handle — size and
+  birth instant carry over;
+* **release** (`op=2`) frees whatever occupancy is the *current* holder of
+  `(channel, handle)`.
+
+Frames are applied in acquisition order (`seq`, tie-broken by `moment` then
+stream ordinal), one at a time. `telber.ownership.import_stream/import_bytes/
+import_file` read real bytes through `scan_records` + `decode_record` and build
+a `LifetimeManifest`:
+
+* every occupancy with birth/release steps, moments, absolute byte offsets and
+  its handle history;
+* **coexistence pairs**, derived once from the recorded lifetimes (the manifest
+  alone shows which occupancies ever coexisted — no source bytes needed);
+* a per-frame `timeline` with the live set after each frame;
+* conflicts, each attributed to the offending frame: `handle_in_use` (allocate
+  onto a live handle), `unknown_source`, `receiver_in_use` (handoff onto an
+  occupied receiver), `double_release`, and `live_at_end` (a normal end that
+  leaves an occupancy unreleased).
+
+A conflict is recorded but not applied. A manifest with any conflict is
+`complete == False`; the planner then refuses to emit a complete plan. A
+manifest round-trips through JSON independently of the original stream.
+
+## Workspace layout
+
+`telber.layout.plan_layout(manifest, TargetSpec(capacity, alignment, pinned))`
+places every occupancy so that:
+
+* each allocation keeps one contiguous run of integer addresses for its whole
+  lifetime;
+* two allocations that *ever coexisted* never overlap (non-coexisting ones may
+  reuse addresses);
+* every start honours the target's `alignment`; `pinned` starts are honoured
+  exactly (a pinned start still has to be aligned and in range);
+* the highest occupied endpoint (`peak`) is **minimal**.
+
+The same manifest can be planned independently for several targets
+(`plan_for_targets`); plans do not affect one another. A layout is exact: it
+decomposes the coexistence graph into connected components (independent, each
+packed from 0), solves dense cliques with a subset DP, and otherwise runs a
+canonical branch-and-bound with a greedy upper bound and an admissible
+concurrency lower bound. On failure it reports `conflict` (a pin that cannot be
+honoured / overlaps a coexisting pin) or `insufficient_space`, with a detail
+string. The offline sample is bounded to **≤ 12 allocations** and **≤ 64 bytes**
+of capacity; larger inputs are rejected rather than silently planned.
 
 ## Bounds
 
@@ -116,6 +175,8 @@ optional presence decisions, nested boundaries and error offsets.
   before copy
 
 The block size is I/O granularity only and never changes offsets or results.
+
+## Fact repository
 
 ## Fact repository
 
@@ -149,6 +210,23 @@ python3 -m telber.cli ingest product.json telemetry.bin --db facts.sqlite
 python3 -m telber.cli report facts.sqlite --import-id 1 --relation
 ```
 
+Ownership / lifetime / layout (the `data` is a real synthetic byte stream):
+
+```bash
+python3 -m telber.ownership_demo                 # all sample scenarios + plans
+python3 -m telber.ownership_demo --out out/       # writes *.bin, *.manifest.json, plans.json
+python3 tools/ownership_demo.py                   # same, discoverable entry point
+
+python3 -m telber.cli generate-ownership out/own  # write the demo .bin streams
+python3 -m telber.cli ownership-import out/own/coexist.bin -o manifest.json
+# target.json: {"name": "pin-3", "capacity": 8, "pinned": {"occ-1": 3}}
+python3 -m telber.cli layout manifest.json target.json
+```
+
+`ownership-import` writes a manifest and exits `3` when it recorded conflicts
+(a valid artifact, not a clean run). `layout` exits `1` when a target cannot
+hold the manifest and `2` when the manifest itself has a conflict.
+
 ## Tests
 
 ```bash
@@ -173,4 +251,13 @@ Coverage highlights (`tests/`):
   definite and indefinite encodings;
 * `test_demo_truth.py` — checks the demo's relation table against an
   independently derived presence map and byte ranges;
+* `test_ownership.py` — real-byte ownership import: handoff moves an identity,
+  release targets the current holder, handle reuse creates a new identity, and
+  failed handoff / double release / allocate-on-live / live-at-end are flagged
+  on the offending frame; manifest round-trip;
+* `test_layout.py` — minimal peak, coexistence disjointness, non-coexisting
+  reuse, alignment holes, pins, disjoint components, conflicted-manifest refusal,
+  and the ≤12/≤64 sample bounds;
+* `test_ownership_demo.py` — real stream → manifest → layout end-to-end, the
+  eight-byte sample scenarios, CLI, and the unchanged legacy telemetry CLI;
 * `test_scale.py` — depth 32, 100 MiB stream, 2 MiB body cap (opt-in).

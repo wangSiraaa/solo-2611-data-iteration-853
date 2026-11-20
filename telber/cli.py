@@ -8,6 +8,12 @@ Examples::
     python3 -m telber.cli encode product.json values.json -o record.bin
     python3 -m telber.cli ingest product.json telemetry.bin -o telemetry.sqlite
     python3 -m telber.cli report telemetry.sqlite
+
+    # ownership / lifetime manifest / layout
+    python3 -m telber.cli ownership-import own.bin -o manifest.json
+    python3 -m telber.cli layout manifest.json target.json
+
+The ordinary telemetry commands above are unchanged.
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from telber.errors import TelberError  # noqa: E402
+from telber.errors import LayoutError, TelberError  # noqa: E402
 from telber.repository import Repository  # noqa: E402
 from telber.service import CompileService  # noqa: E402
 
@@ -114,6 +120,80 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_ownership_import(args) -> int:
+    from telber.ownership import import_file
+
+    if args.schema:
+        with open(args.schema, "r", encoding="utf-8") as fh:
+            product = CompileService().compile(fh.read())
+    else:
+        from telber.ownership import compile_ownership_product
+
+        product = compile_ownership_product()
+    try:
+        manifest = import_file(args.source, product, block_size=args.block_size)
+    except TelberError as exc:
+        print(json.dumps(exc.as_dict(), indent=2), file=sys.stderr)
+        return 2
+    text = manifest.to_json()
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(
+            json.dumps(
+                {
+                    "manifest": args.out,
+                    "occupancies": len(manifest.occupancies),
+                    "complete": manifest.complete,
+                    "conflicts": [c.as_dict() for c in manifest.conflicts],
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(text, end="")
+    # A manifest with recorded conflicts is a valid artifact but not a clean run.
+    return 0 if manifest.complete else 3
+
+
+def cmd_layout(args) -> int:
+    from telber.layout import TargetSpec, plan_layout
+    from telber.ownership import LifetimeManifest
+
+    manifest = LifetimeManifest.load(args.manifest)
+    targets: list[TargetSpec] = []
+    for path in args.targets:
+        obj = json.loads(Path(path).read_text(encoding="utf-8"))
+        if isinstance(obj, list):
+            targets.extend(TargetSpec.from_dict(t) for t in obj)
+        else:
+            targets.append(TargetSpec.from_dict(obj))
+    try:
+        plans = [plan_layout(manifest, t) for t in targets]
+    except LayoutError as exc:
+        print(json.dumps(exc.as_dict(), indent=2), file=sys.stderr)
+        return 2
+    payload = [p.as_dict() for p in plans]
+    text = json.dumps(payload, indent=2, default=str) + "\n"
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"{len(plans)} plan(s) -> {args.out}")
+    else:
+        print(text, end="")
+    return 0 if all(p.feasible for p in plans) else 1
+
+
+def cmd_generate(args) -> int:
+    """Write the demo's real synthetic ownership streams to a directory."""
+    from telber.ownership_demo import sample_streams
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, data in sample_streams().items():
+        (out / f"{name}.bin").write_bytes(data)
+        print(f"{len(data):4d} bytes  {out / (name + '.bin')}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="telber", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -147,6 +227,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--import-id", type=int, default=None)
     p.add_argument("--relation", action="store_true", help="include record/field facts")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser(
+        "ownership-import",
+        help="import an ownership-transfer stream into a lifetime manifest",
+    )
+    p.add_argument("source", help="real binary ownership stream")
+    p.add_argument("-o", "--out", help="manifest JSON path (default: stdout)")
+    p.add_argument("--schema", default=None, help="ownership schema (default: built-in)")
+    p.add_argument("--block-size", type=int, default=65536)
+    p.set_defaults(func=cmd_ownership_import)
+
+    p = sub.add_parser("layout", help="plan a lifetime manifest onto target machines")
+    p.add_argument("manifest")
+    p.add_argument("targets", nargs="+", help="target JSON file(s); a list plans several")
+    p.add_argument("-o", "--out")
+    p.set_defaults(func=cmd_layout)
+
+    p = sub.add_parser("generate-ownership", help="write the demo ownership streams")
+    p.add_argument("out", help="directory to write *.bin streams into")
+    p.set_defaults(func=cmd_generate)
 
     args = parser.parse_args(argv)
     return args.func(args)

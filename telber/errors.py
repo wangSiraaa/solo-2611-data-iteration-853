@@ -91,3 +91,15 @@ class ImportStateError(TelberError):
     """An import cannot be mutated in the requested way."""
 
     code = "import_state_error"
+
+
+class OwnershipError(TelberError):
+    """An ownership transfer stream violates the occupancy state machine."""
+
+    code = "ownership_error"
+
+
+class LayoutError(TelberError):
+    """A lifetime manifest cannot be planned onto a target."""
+
+    code = "layout_error"

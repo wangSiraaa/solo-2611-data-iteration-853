@@ -1,0 +1,63 @@
+{
+  "schema": "telber.ownership",
+  "version": 1,
+  "description": "Buffer ownership-transfer directory. Each record is one acquisition-ordered frame: allocation (op 0) creates an occupancy with a size and an initial channel-local handle; handoff (op 1) atomically moves the same occupancy from (channel, handle) to a free (to_channel, to_handle); release (op 2) frees the occupancy currently held by (channel, handle).",
+  "root": {
+    "name": "OwnershipRecord",
+    "tag": {"class": "universal", "number": 16},
+    "type": "SEQUENCE",
+    "fields": [
+      {
+        "name": "seq",
+        "tag": {"class": "context", "number": 0},
+        "mode": "implicit",
+        "type": "INTEGER"
+      },
+      {
+        "name": "moment",
+        "tag": {"class": "context", "number": 1},
+        "mode": "implicit",
+        "type": "INTEGER"
+      },
+      {
+        "name": "op",
+        "tag": {"class": "context", "number": 2},
+        "mode": "implicit",
+        "type": "INTEGER"
+      },
+      {
+        "name": "channel",
+        "tag": {"class": "context", "number": 3},
+        "mode": "implicit",
+        "type": "INTEGER"
+      },
+      {
+        "name": "handle",
+        "tag": {"class": "context", "number": 4},
+        "mode": "implicit",
+        "type": "INTEGER"
+      },
+      {
+        "name": "size",
+        "tag": {"class": "context", "number": 5},
+        "mode": "implicit",
+        "type": "INTEGER",
+        "optional": true
+      },
+      {
+        "name": "to_channel",
+        "tag": {"class": "context", "number": 6},
+        "mode": "implicit",
+        "type": "INTEGER",
+        "optional": true
+      },
+      {
+        "name": "to_handle",
+        "tag": {"class": "context", "number": 7},
+        "mode": "implicit",
+        "type": "INTEGER",
+        "optional": true
+      }
+    ]
+  }
+}
